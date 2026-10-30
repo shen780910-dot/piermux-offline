@@ -7,9 +7,12 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh && sh /tmp/rustup.sh -y --profile minimal
 ARG PIERMUX_COMMIT=fbad099633383a8544dc34576dc4ae220188b3f2
 RUN git clone https://github.com/kirinchen/piermux.git /src && cd /src && git checkout --detach "$PIERMUX_COMMIT"
+COPY patches/ /extensions/patches/
+RUN cd /src && git apply --check /extensions/patches/window-tabs.patch && git apply /extensions/patches/window-tabs.patch
+COPY extensions/window-tabs.test.tsx /src/tests/window-tabs.test.tsx
 WORKDIR /src
-RUN npm ci && npm run tauri build -- --no-bundle -- --locked
-RUN mkdir -p /out && cp src-tauri/target/release/piermux /out/ && cp LICENSE /out/LICENSE.piermux && git rev-parse HEAD > /out/UPSTREAM_COMMIT
+RUN npm ci && npm run build && npm exec --yes --package=tsx@4.20.6 -- tsx --test tests/window-tabs.test.tsx && cargo test --release --manifest-path src-tauri/Cargo.toml windows::tests --locked && npm run tauri build -- --no-bundle -- --locked
+RUN mkdir -p /out && cp src-tauri/target/release/piermux /out/ && cp LICENSE /out/LICENSE.piermux && cp /extensions/patches/window-tabs.patch /out/WINDOW_TABS.patch && git rev-parse HEAD > /out/UPSTREAM_COMMIT
 
 FROM ubuntu:22.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
