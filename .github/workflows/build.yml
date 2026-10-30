@@ -5,6 +5,7 @@ on:
     paths:
       - patches/**
       - extensions/**
+      - local_bridge.py
       - smoke-test.sh
       - Dockerfile
       - start-piermux.sh
@@ -28,7 +29,7 @@ jobs:
         id: image-cache
         with:
           path: .build-cache/piermux-image.tar
-          key: runtime-v1-${{ runner.os }}-${{ hashFiles('Dockerfile', 'patches/**', 'extensions/**') }}
+          key: runtime-v1-${{ runner.os }}-${{ hashFiles('Dockerfile', 'patches/**', 'extensions/**', 'local_bridge.py') }}
       - name: Load cached runtime
         if: steps.image-cache.outputs.cache-hit == 'true'
         run: docker load -i .build-cache/piermux-image.tar
@@ -44,7 +45,7 @@ jobs:
         if: steps.image-cache.outputs.cache-hit != 'true'
         with:
           path: .build-cache/piermux-image.tar
-          key: runtime-v1-${{ runner.os }}-${{ hashFiles('Dockerfile', 'patches/**', 'extensions/**') }}
+          key: runtime-v1-${{ runner.os }}-${{ hashFiles('Dockerfile', 'patches/**', 'extensions/**', 'local_bridge.py') }}
       - name: Verify GUI under Xvfb
         timeout-minutes: 3
         run: |
@@ -66,7 +67,7 @@ jobs:
           trap 'docker rm "$container_id" >/dev/null' EXIT
           docker export "$container_id" -o rootfs.tar
           tar --no-same-owner --exclude='./dev/*' --exclude='dev/*' --exclude='./proc/*' --exclude='proc/*' --exclude='./sys/*' --exclude='sys/*' -xf rootfs.tar -C staging/piermux-offline/rootfs
-          cp start-piermux.sh README.md staging/piermux-offline/
+          cp start-piermux.sh local_bridge.py README.md staging/piermux-offline/
           chmod +x staging/piermux-offline/start-piermux.sh
           tar -C staging -czf dist/piermux-offline-linux-x86_64.tar.gz piermux-offline
           cd dist

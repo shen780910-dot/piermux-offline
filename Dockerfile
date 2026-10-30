@@ -1,7 +1,7 @@
 FROM node:22-bookworm AS node
 FROM ubuntu:22.04 AS build
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config tmux libevent-dev libncurses-dev libwebkit2gtk-4.1-dev libssl-dev librsvg2-dev libxdo-dev libdbus-1-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git python3 build-essential pkg-config tmux libevent-dev libncurses-dev libwebkit2gtk-4.1-dev libssl-dev librsvg2-dev libxdo-dev libdbus-1-dev && rm -rf /var/lib/apt/lists/*
 COPY --from=node /usr/local/ /usr/local/
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh && sh /tmp/rustup.sh -y --profile minimal
@@ -12,9 +12,12 @@ COPY patches/ /extensions/patches/
 RUN cd /src && git apply --check /extensions/patches/window-tabs.patch && git apply /extensions/patches/window-tabs.patch
 COPY extensions/window-tabs.test.tsx /src/tests/window-tabs.test.tsx
 COPY extensions/test-tmux-windows.sh /extensions/test-tmux-windows.sh
+COPY local_bridge.py /extensions/local_bridge.py
+COPY extensions/test_local_bridge.py /extensions/tests/test_local_bridge.py
+RUN cd /extensions && python3 -m unittest discover -s tests -p test_local_bridge.py
 RUN bash /extensions/test-tmux-windows.sh && TMUX_TEST_BIN=/opt/tmux-2.7/bin/tmux bash /extensions/test-tmux-windows.sh
 WORKDIR /src
-RUN npm ci && npm run build && npm exec --yes --package=tsx@4.20.6 -- tsx --test tests/window-tabs.test.tsx && cargo test --release --manifest-path src-tauri/Cargo.toml windows::tests --locked && npm run tauri build -- --no-bundle -- --locked
+RUN npm ci && npm run build && npm exec --yes --package=tsx@4.20.6 -- tsx --test tests/window-tabs.test.tsx && cargo test --release --manifest-path src-tauri/Cargo.toml windows::tests --locked && PIERMUX_TEST_TMUX=/opt/tmux-2.7/bin/tmux cargo test --release --manifest-path src-tauri/Cargo.toml transport::local_tests --locked && npm run tauri build -- --no-bundle -- --locked
 RUN mkdir -p /out && cp src-tauri/target/release/piermux /out/ && cp LICENSE /out/LICENSE.piermux && cp /extensions/patches/window-tabs.patch /out/WINDOW_TABS.patch && git rev-parse HEAD > /out/UPSTREAM_COMMIT
 
 FROM ubuntu:22.04 AS runtime

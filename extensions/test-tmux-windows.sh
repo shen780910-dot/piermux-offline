@@ -17,6 +17,10 @@ done
 tmux_ci capture-pane -t '=project-a:' -p | grep -q agent-two
 test "$(tmux_ci display-message -p -t '=project-a:' '#{pane_current_path}')" = "$work_dir/agent-2"
 test "$(tmux_ci display-message -p -t '=project-a:' '#{window_id}')" = "$second_id"
+tmux_ci copy-mode -t '=project-a:'
+test "$(tmux_ci display-message -p -t '=project-a:' '#{pane_in_mode}')" = 1
+test "$(tmux_ci display-message -p -t '=project-a:0' '#{pane_in_mode}')" = 0
+tmux_ci send-keys -t '=project-a:' -X cancel
 tmux_ci kill-session -t '=project-a'
 if tmux_ci list-windows -t '=project-a:' >/dev/null 2>&1; then
   echo "Exact session lookup incorrectly matched project-alpha" >&2

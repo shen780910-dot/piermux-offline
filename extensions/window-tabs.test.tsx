@@ -4,6 +4,16 @@ import { test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WindowTabs } from "../src/desktop/WindowTabs";
+import { emptyLocalHostForm } from "../src/lib/types";
+
+test("new desktop connections require no SSH credentials", () => {
+  const form = emptyLocalHostForm();
+  assert.equal(form.auth_type, "local");
+  assert.equal(form.ssh_host, "");
+  assert.equal(form.ssh_user, "");
+  assert.equal(form.private_key_path, null);
+  assert.equal(form.password, null);
+});
 
 const session = { socket: "default", name: "project-a", attached: true, activity: "", windows: 2 };
 function render(windows: unknown[], enabled = true, sessionName = "project-a") {

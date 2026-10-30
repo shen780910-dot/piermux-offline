@@ -1,3 +1,105 @@
+--- a/src/desktop/HostFormDialog.tsx
++++ b/src/desktop/HostFormDialog.tsx
+@@ -24,7 +24,7 @@
+   useUpdateHost,
+   useTestConnection,
+ } from "@/hooks/useHosts";
+-import { WINDOWS_REMOTE_SHELL, emptyHostForm, hostToForm } from "@/lib/types";
++import { WINDOWS_REMOTE_SHELL, emptyLocalHostForm, hostToForm } from "@/lib/types";
+ import type { AuthType, Host, HostForm } from "@/lib/types";
+ import { api } from "@/lib/tauri";
+ 
+@@ -37,14 +37,14 @@
+ 
+ export function HostFormDialog({ open, onOpenChange, editing }: Props) {
+   const isEdit = Boolean(editing);
+-  const [form, setForm] = React.useState<HostForm>(emptyHostForm);
++  const [form, setForm] = React.useState<HostForm>(emptyLocalHostForm);
+   const create = useCreateHost();
+   const update = useUpdateHost();
+   const test = useTestConnection();
+ 
+   // editing 變動時同步表單
+   React.useEffect(() => {
+-    if (open) setForm(editing ? hostToForm(editing) : emptyHostForm());
++    if (open) setForm(editing ? hostToForm(editing) : emptyLocalHostForm());
+   }, [open, editing]);
+ 
+   const set =
+@@ -97,11 +97,11 @@
+     <Dialog open={open} onOpenChange={onOpenChange}>
+       <DialogContent>
+         <DialogHeader>
+-          <DialogTitle>{isEdit ? "編輯 Host" : "新增 Host"}</DialogTitle>
++          <DialogTitle>{isEdit ? "編輯連線" : "新增連線"}</DialogTitle>
+           <DialogDescription>
+-            {isEdit
+-              ? "改完按儲存。密碼留空表示不變動。"
+-              : "填寫 SSH 連線資訊。密碼會存到 OS keystore,不寫進 DB。"}
++            {form.auth_type === "local"
++              ? "直接管理這台電腦的 tmux，只需填寫顯示名稱。"
++              : "遠端連線使用 SSH。密碼會存到系統 keyring。"}
+           </DialogDescription>
+         </DialogHeader>
+ 
+@@ -114,6 +114,20 @@
+             />
+           </FieldRow>
+ 
++          <FieldRow label="連線方式">
++            <Select value={form.auth_type === "local" ? "local" : "ssh"}
++              onValueChange={(value) => setForm((current) => value === "local"
++                ? { ...emptyLocalHostForm(), display_name: current.display_name }
++                : { ...current, auth_type: "key" })}>
++              <SelectTrigger><SelectValue /></SelectTrigger>
++              <SelectContent>
++                <SelectItem value="local">本機 tmux</SelectItem>
++                <SelectItem value="ssh">SSH 遠端主機</SelectItem>
++              </SelectContent>
++            </Select>
++          </FieldRow>
++
++          {form.auth_type !== "local" && (<>
+           <div className="grid grid-cols-3 gap-2">
+             <FieldRow label="SSH host" required className="col-span-2">
+               <Input
+@@ -213,6 +227,7 @@
+               onChange={(e) => set("sort_order")(Number(e.target.value) || 0)}
+             />
+           </FieldRow>
++          </>)}
+         </div>
+ 
+         <DialogFooter>
+@@ -237,7 +252,7 @@
+           >
+             取消
+           </Button>
+-          <Button onClick={handleSave} disabled={submitting}>
++          <Button onClick={handleSave} disabled={submitting || !form.display_name.trim()}>
+             {submitting ? (
+               <>
+                 <Loader2 className="h-4 w-4 animate-spin" />
+--- a/src/desktop/HostTree.tsx
++++ b/src/desktop/HostTree.tsx
+@@ -286,7 +286,7 @@
+           type="button"
+           onClick={handleSelectHost}
+           className="flex-1 truncate text-left text-sm font-medium"
+-          title={`${host.ssh_user}@${host.ssh_host}:${host.ssh_port} — 點開看 capture grid`}
++          title={host.auth_type === "local" ? "本機 tmux — 點開看畫面" : `${host.ssh_user}@${host.ssh_host}:${host.ssh_port} — 點開看 capture grid`}
+         >
+           {host.display_name}
+         </button>
+@@ -550,7 +550,7 @@
+       className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-muted ${
+         selected ? "bg-muted" : ""
+       }`}
+-      title={`直連 ${host.ssh_user}@${host.ssh_host}(無 tmux,login shell)`}
++      title={host.auth_type === "local" ? "開啟本機終端機" : `直連 ${host.ssh_user}@${host.ssh_host}(無 tmux,login shell)`}
+     >
+       <Zap className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+       <span className="flex-1 truncate font-mono italic text-foreground/80">
 --- a/src/desktop/SessionPanel.tsx
 +++ b/src/desktop/SessionPanel.tsx
 @@ -33,6 +33,7 @@
@@ -8,6 +110,15 @@
  import { PasteConfirmDialog } from "@/components/PasteConfirmDialog";
  import { usePasteGuard } from "@/components/usePasteGuard";
  
+@@ -774,7 +775,7 @@
+               <ModeBadge mode={mode} target={target} />
+             </div>
+             <div className="mt-1 truncate text-xs text-muted-foreground">
+-              {host.ssh_user}@{host.ssh_host}:{host.ssh_port}
++              {host.auth_type === "local" ? "本機 tmux" : `${host.ssh_user}@${host.ssh_host}:${host.ssh_port}`}
+               {target.kind === "tmux" && (
+                 <>
+                   {" · "}
 @@ -862,6 +863,16 @@
          </div>
        </header>
@@ -25,6 +136,15 @@
        <main className="relative flex-1 overflow-hidden bg-[#0a0a0a]">
          <div ref={containerRef} className="absolute inset-0" />
          {dragOver && target.kind === "tmux" && (
+@@ -869,7 +880,7 @@
+             <Upload className="h-8 w-8 text-primary" />
+             <p className="text-sm font-medium">放開上傳到這個 session 的目前目錄</p>
+             <p className="text-xs text-muted-foreground">
+-              {host.ssh_user}@{host.ssh_host} · {target.session.name}
++              {host.auth_type === "local" ? host.display_name : `${host.ssh_user}@${host.ssh_host}`} · {target.session.name}
+             </p>
+           </div>
+         )}
 --- /dev/null
 +++ b/src/desktop/WindowTabs.tsx
 @@ -0,0 +1,91 @@
@@ -119,8 +239,108 @@
 +    </section>
 +  );
 +}
+--- a/src/lib/types.ts
++++ b/src/lib/types.ts
+@@ -1,7 +1,7 @@
+ // Mirrors src-tauri/src/hosts.rs Host / HostForm。
+ // snake_case keys 直接對齊 backend 跟 DB column 名,不轉 camelCase。
+ 
+-export type AuthType = "key" | "password";
++export type AuthType = "local" | "key" | "password";
+ 
+ export type Host = {
+   id: string;
+@@ -45,6 +45,11 @@
+   remote_shell: null,
+ });
+ 
++export const emptyLocalHostForm = (): HostForm => ({
++  ...emptyHostForm(),
++  auth_type: "local",
++});
++
+ // Mirrors src-tauri/src/hosts.rs Session
+ export type Session = {
+   name: string;
+--- a/src-tauri/src/attach.rs
++++ b/src-tauri/src/attach.rs
+@@ -31,7 +31,7 @@
+ 
+ use crate::hosts;
+ use crate::sessions;
+-use crate::ssh::{self, HostKeyPolicy, PtyChannel, PtyMsg, PtyRead, PtyWrite, SshSession};
++use crate::transport::{PtyChannel, PtyMsg, PtyRead, PtyWrite, Session as SshSession};
+ 
+ #[derive(Default)]
+ pub struct AttachRegistry {
+@@ -201,7 +201,7 @@
+         .map_err(|e| format!("fetch host: {e}"))?;
+     let ssh = sessions::connect_host(pool.inner(), &host)
+         .await
+-        .map_err(|e| format!("ssh connect: {e}"))?;
++        .map_err(|e| format!("連線失敗: {e:#}"))?;
+     let ssh = Arc::new(ssh);
+ 
+     let mut pty = open_pty_channel(&ssh, cols, rows).await?;
+@@ -222,7 +222,7 @@
+     } else {
+         let inner = format!(
+             "printf '\\033]7777;%s\\007' \"$(tty)\"; T=''; {tmux} -T sync -V >/dev/null 2>&1 && T='-T sync'; exec {tmux} $T attach -t {}",
+-            shell_quote(&session_name)
++            shell_quote(&format!("={session_name}"))
+         );
+         format!("sh -c {}", shell_quote(&inner))
+     };
+@@ -236,7 +236,7 @@
+         ssh,
+         Arc::new(session),
+         sess_rx,
+-        Some((tmux, session_name)),
++        Some((tmux, if host.is_psmux() { format!("{session_name}:0") } else { crate::windows::exact_target(&session_name, None) })),
+     )
+     .await)
+ }
+@@ -285,17 +285,9 @@
+     let host = hosts::fetch_one(pool.inner(), &host_id)
+         .await
+         .map_err(|e| format!("fetch host: {e}"))?;
+-    let password = sessions::read_password_for(&host).map_err(|e| e.to_string())?;
+-    let auth = sessions::build_auth(&host, password.as_deref()).map_err(|e| e.to_string())?;
+-    let port = sessions::port_u16(&host).map_err(|e| e.to_string())?;
+-    let policy = HostKeyPolicy::Tofu {
+-        pool: pool.inner(),
+-        host_id: &host.id,
+-    };
+-
+-    let ssh = ssh::connect(&host.ssh_host, port, &host.ssh_user, auth, policy)
+-        .await
+-        .map_err(|e| format!("ssh connect: {e}"))?;
++    let ssh = sessions::connect_host(pool.inner(), &host)
++        .await
++        .map_err(|e| format!("連線失敗: {e:#}"))?;
+     let ssh = Arc::new(ssh);
+ 
+     let mut pty = open_pty_channel(&ssh, cols, rows).await?;
+@@ -345,7 +337,7 @@
+     };
+ 
+     let lines = lines.clamp(1, 500);
+-    let pane = shell_quote(&format!("{session}:0"));
++    let pane = shell_quote(&session);
+     let dir = if up { "scroll-up" } else { "scroll-down" };
+     // 先確保進 copy-mode(已在 copy-mode 時 tmux 視為 no-op,不重置卷動位置),
+     // 再送 N 次 scroll。scroll-down 滾到底 tmux 會自動退出 copy-mode。
 --- a/src-tauri/src/capture.rs
 +++ b/src-tauri/src/capture.rs
+@@ -29,7 +29,7 @@
+ 
+ use crate::hosts::{self, Host};
+ use crate::sessions;
+-use crate::ssh::SshSession;
++use crate::transport::Session as SshSession;
+ 
+ const HOST_CONCURRENCY: usize = 3;
+ 
 @@ -133,9 +133,9 @@
          .await
          .map_err(|e| format!("fetch host: {e}"))?;
@@ -157,17 +377,75 @@
          TMUX_CAPTURE_LINES,
      );
  
+--- a/src-tauri/src/commands.rs
++++ b/src-tauri/src/commands.rs
+@@ -18,6 +18,9 @@
+ 
+ #[tauri::command]
+ pub async fn create_host(pool: State<'_, SqlitePool>, form: HostForm) -> Result<Host, String> {
++    if form.display_name.trim().is_empty() {
++        return Err("請輸入顯示名稱".to_string());
++    }
+     // 創 host 之前先驗 — auth=password 必須有密碼,不然存進去會壞
+     // (form.password=None 時 store_password 不 call,後續 list_sessions
+     //  從 keyring 讀不到,使用者只能 edit 重設)
+@@ -52,7 +55,7 @@
+         if let Some(pw) = form.password.as_deref() {
+             secret::store_password(&host.id, pw).map_err(|e| e.to_string())?;
+         }
+-    } else {
++    } else if form.auth_type != "local" {
+         secret::delete_password(&host.id).map_err(|e| e.to_string())?;
+     }
+     Ok(host)
+@@ -60,10 +63,13 @@
+ 
+ #[tauri::command]
+ pub async fn delete_host(pool: State<'_, SqlitePool>, id: String) -> Result<(), String> {
++    let host = hosts::fetch_one(pool.inner(), &id).await.map_err(|e| e.to_string())?;
+     hosts::delete_host(pool.inner(), &id)
+         .await
+         .map_err(|e| e.to_string())?;
+-    secret::delete_password(&id).map_err(|e| e.to_string())?;
++    if host.auth_type != "local" {
++        secret::delete_password(&id).map_err(|e| e.to_string())?;
++    }
+     // 一起清 TOFU 紀錄 — 重新加同 host 等於明示「我接受新 server key」
+     host_keys::forget(pool.inner(), &id)
+         .await
+@@ -73,6 +79,9 @@
+ 
+ #[tauri::command]
+ pub async fn test_connection(form: HostForm) -> Result<(), String> {
++    if form.auth_type == "local" {
++        return crate::transport::Session::local().await.map(|_| ()).map_err(|e| format!("{e:#}"));
++    }
+     let port: u16 = form
+         .ssh_port
+         .try_into()
+--- a/src-tauri/src/hosts.rs
++++ b/src-tauri/src/hosts.rs
+@@ -56,7 +56,7 @@
+     /// psmux 模式(#225):有設 `remote_shell` 就是 Windows 主機 —— 唯一需要包遠端
+     /// shell 的理由就是登入 shell 不是 POSIX。
+     pub fn is_psmux(&self) -> bool {
+-        self.remote_shell.is_some()
++        self.auth_type != "local" && self.remote_shell.is_some()
+     }
+ }
+ 
 --- a/src-tauri/src/lib.rs
 +++ b/src-tauri/src/lib.rs
-@@ -9,6 +9,7 @@
+@@ -9,6 +9,8 @@
  mod sessions;
  mod ssh;
  mod upload;
 +mod windows;
++mod transport;
  
  use tauri::Manager;
  
-@@ -91,6 +92,8 @@
+@@ -91,6 +93,8 @@
              commands::import_private_key,
              // M1c real(SSH exec):取代之前的 sessions_mock
              sessions::list_sessions,
@@ -191,6 +469,338 @@
      let payload_q = shell_quote(&payload);
      let cmd = if literal {
          format!("{tmux} send-keys -l -t {target} -- {payload_q}")
+--- a/src-tauri/src/sessions.rs
++++ b/src-tauri/src/sessions.rs
+@@ -67,7 +67,10 @@
+ 
+ /// 連上這台主機(auth + TOFU),並依主機設定帶好 `remote_shell`(#225)。
+ /// 非 PTY 的指令都該走這個連出來的 session,Windows 主機才會經過遠端 shell。
+-pub(crate) async fn connect_host(pool: &SqlitePool, host: &Host) -> Result<ssh::SshSession> {
++pub(crate) async fn connect_host(pool: &SqlitePool, host: &Host) -> Result<crate::transport::Session> {
++    if host.auth_type == "local" {
++        return crate::transport::Session::local().await;
++    }
+     let password = read_password_for(host)?;
+     let auth = build_auth(host, password.as_deref())?;
+     let port = port_u16(host)?;
+@@ -76,7 +79,7 @@
+         host_id: &host.id,
+     };
+     let session = ssh::connect(&host.ssh_host, port, &host.ssh_user, auth, policy).await?;
+-    Ok(session.with_remote_shell(host.remote_shell.clone()))
++    Ok(crate::transport::Session::Remote(session.with_remote_shell(host.remote_shell.clone())))
+ }
+ 
+ /// one-shot:連 + 跑一條指令(會經過 remote_shell)。
+@@ -97,7 +100,7 @@
+     let cmd = format!(
+         "{} kill-session -t {}",
+         tmux_cmd(&host, &socket),
+-        shell_quote(&session_name)
++        shell_quote(&if host.is_psmux() { session_name.clone() } else { format!("={session_name}") })
+     );
+     run_tmux_control(pool.inner(), &host, &cmd)
+         .await
+@@ -159,7 +162,7 @@
+     let cmd = format!(
+         "{} rename-session -t {} {}",
+         tmux_cmd(&host, &socket),
+-        shell_quote(&session_name),
++        shell_quote(&if host.is_psmux() { session_name.clone() } else { format!("={session_name}") }),
+         shell_quote(new_name),
+     );
+     run_tmux_control(pool.inner(), &host, &cmd)
+@@ -214,6 +217,13 @@
+         .await
+         .map_err(|e| format!("fetch host: {e}"))?;
+ 
++    if host.auth_type == "local" {
++        return Ok(if crate::transport::Session::local().await.is_ok() {
++            HostConnectionStatus::Connected
++        } else {
++            HostConnectionStatus::Disconnected
++        });
++    }
+     let password = match read_password_for(&host) {
+         Ok(p) => p,
+         Err(_) => return Ok(HostConnectionStatus::Disconnected),
+@@ -409,7 +419,7 @@
+         let mut got = 0usize;
+         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(4);
+         while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, rx.wait()).await {
+-            if let ssh::PtyMsg::Data { data } = msg {
++            if let crate::transport::PtyMsg::Data { data } = msg {
+                 got += data.len();
+             }
+         }
+--- /dev/null
++++ b/src-tauri/src/transport.rs
+@@ -0,0 +1,265 @@
++use anyhow::{anyhow, bail, Context, Result};
++use serde_json::{json, Value};
++use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
++use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
++use tokio::net::UnixStream;
++use tokio::sync::Mutex;
++use crate::ssh;
++
++pub enum Session {
++    Remote(ssh::SshSession),
++    Local(String),
++}
++
++#[cfg(test)]
++mod local_tests {
++    use super::*;
++    use std::os::unix::fs::PermissionsExt;
++
++    struct BridgeGuard { child:std::process::Child, directory:std::path::PathBuf }
++    impl Drop for BridgeGuard {
++        fn drop(&mut self) {
++            let _ = self.child.kill();
++            let _ = self.child.wait();
++            let _ = std::fs::remove_dir_all(&self.directory);
++        }
++    }
++
++    #[tokio::test]
++    async fn local_transport_keeps_host_environment_and_tmux_alive() {
++        let directory = std::env::temp_dir().join(format!("piermux-rpc-{}", uuid::Uuid::new_v4()));
++        std::fs::create_dir(&directory).unwrap();
++        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
++        let socket = directory.join("bridge.sock");
++        let child = std::process::Command::new("python3")
++            .args(["/extensions/local_bridge.py", "--socket"])
++            .arg(&socket).env("PIERMUX_HOST_MARKER", "host-environment")
++            .env("TMUX", "/tmp/outer,123,0").env("TMUX_PANE", "%123").spawn().unwrap();
++        let _guard = BridgeGuard { child, directory };
++        for _ in 0..100 {
++            if socket.exists() { break; }
++            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
++        }
++        let session = Session::Local(socket.to_string_lossy().to_string());
++        let marker = session.exec("printf '%s' \"$PIERMUX_HOST_MARKER\"").await.unwrap();
++        assert_eq!(marker, "host-environment");
++        assert!(session.exec("printf failure >&2; exit 7").await.unwrap_err().to_string().contains("failure"));
++        let uploaded = _guard.directory.join("uploaded.bin");
++        let payload = vec![255_u8; 65536];
++        session.upload(&format!("'{}'", uploaded.display()), &payload).await.unwrap();
++        assert_eq!(std::fs::read(uploaded).unwrap(), payload);
++        let binary = std::env::var("PIERMUX_TEST_TMUX").unwrap_or_else(|_| "tmux".into());
++        let mux = format!("{binary} -L local-test-{}", uuid::Uuid::new_v4());
++        session.exec(&format!("{mux} new-session -d -s project-a && {mux} set-option -g status off")).await.unwrap();
++        let mut channel = session.open_pty(80, 24).await.unwrap();
++        channel.exec(&format!("{mux} attach -t project-a")).await.unwrap();
++        let (mut read, write) = channel.into_parts();
++        tokio::time::timeout(std::time::Duration::from_secs(5), read.wait()).await.unwrap().unwrap();
++        write.window_change(100, 30, 0, 0).await.unwrap();
++        let mut dimensions = String::new();
++        for _ in 0..40 {
++            dimensions = session.exec(&format!("{mux} display-message -p -t '=project-a:' '#{{pane_height}} #{{pane_width}}'")).await.unwrap();
++            if dimensions.trim() == "30 100" { break; }
++            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
++        }
++        assert_eq!(dimensions.trim(), "30 100");
++        write.data_bytes(b"printf 'LOCAL_PTY_OK'; stty size\n".to_vec()).await.unwrap();
++        let mut output = Vec::new();
++        tokio::time::timeout(std::time::Duration::from_secs(10), async {
++            loop {
++                match read.wait().await {
++                    Some(PtyMsg::Data { data }) => {
++                        output.extend(data);
++                        let text = String::from_utf8_lossy(&output);
++                        if text.contains("LOCAL_PTY_OK") && text.contains("30 100") { break; }
++                    }
++                    Some(PtyMsg::Eof) | None => panic!("PTY ended before input and resize completed"),
++                    _ => {}
++                }
++            }
++        }).await.unwrap();
++        write.close().await.unwrap();
++        drop(read);
++        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
++        session.exec(&format!("{mux} has-session -t project-a")).await.unwrap();
++        session.exec(&format!("{mux} kill-server")).await.unwrap();
++    }
++}
++
++async fn send(writer: &mut (impl AsyncWriteExt + Unpin), message: &Value) -> Result<()> {
++    let mut body = serde_json::to_vec(message)?;
++    body.push(b'\n');
++    writer.write_all(&body).await?;
++    Ok(())
++}
++
++async fn response(reader: &mut (impl AsyncBufReadExt + Unpin)) -> Result<Value> {
++    let mut line = String::new();
++    if reader.read_line(&mut line).await? == 0 { bail!("本機連線已關閉"); }
++    let value: Value = serde_json::from_str(&line)?;
++    if value.get("ok") == Some(&Value::Bool(false)) {
++        bail!("{}", value["error"].as_str().unwrap_or("本機操作失敗"));
++    }
++    Ok(value)
++}
++
++async fn rpc(path: &str, message: Value) -> Result<Value> {
++    tokio::time::timeout(std::time::Duration::from_secs(130), async {
++        let mut stream = UnixStream::connect(path).await.context("本機 bridge 無法連線，請使用新版 start-piermux.sh 啟動")?;
++        send(&mut stream, &message).await?;
++        response(&mut BufReader::new(stream)).await
++    }).await.map_err(|_| anyhow!("本機操作逾時"))?
++}
++
++impl Session {
++    pub async fn local() -> Result<Self> {
++        let path = std::env::var("PIERMUX_LOCAL_SOCKET")
++            .context("找不到本機連線，請使用新版 start-piermux.sh 啟動")?;
++        rpc(&path, json!({"op": "ping"})).await?;
++        Ok(Self::Local(path))
++    }
++    pub async fn exec(&self, cmd: &str) -> Result<String> {
++        match self {
++            Self::Remote(session) => session.exec(cmd).await,
++            Self::Local(path) => Ok(rpc(path, json!({"op":"exec", "cmd":cmd})).await?["stdout"].as_str().unwrap_or("").to_string()),
++        }
++    }
++    pub async fn upload(&self, target: &str, data: &[u8]) -> Result<()> {
++        match self {
++            Self::Remote(session) => session.upload(target, data).await,
++            Self::Local(path) => {
++                tokio::time::timeout(std::time::Duration::from_secs(300), async {
++                    let mut stream = UnixStream::connect(path).await?;
++                    send(&mut stream, &json!({"op":"upload", "cmd":format!("cat > {target}"), "size":data.len()})).await?;
++                    let (read, mut write) = stream.into_split();
++                    let mut reader = BufReader::new(read);
++                    response(&mut reader).await?;
++                    if let Err(error) = write.write_all(data).await {
++                        return match response(&mut reader).await {
++                            Err(remote) => Err(remote),
++                            Ok(_) => Err(error.into()),
++                        };
++                    }
++                    write.shutdown().await?;
++                    response(&mut reader).await?;
++                    Ok(())
++                }).await.map_err(|_| anyhow!("本機上傳逾時"))?
++            }
++        }
++    }
++    pub async fn open_pty(&self, cols: u32, rows: u32) -> Result<PtyChannel> {
++        match self {
++            Self::Remote(session) => Ok(PtyChannel::Remote(session.open_pty(cols, rows).await?)),
++            Self::Local(path) => Ok(PtyChannel::Local { path:path.clone(), cols, rows, parts:None }),
++        }
++    }
++}
++
++pub enum PtyChannel {
++    Remote(ssh::PtyChannel),
++    Local { path:String, cols:u32, rows:u32, parts:Option<(PtyRead, PtyWrite)> },
++}
++
++impl PtyChannel {
++    async fn start_local(&mut self, command: Option<&str>) -> Result<()> {
++        let Self::Local { path, cols, rows, parts } = self else { unreachable!() };
++        let mut stream = UnixStream::connect(path.as_str()).await?;
++        let mut message = json!({"op":"pty", "cols":cols, "rows":rows});
++        if let Some(cmd) = command { message["cmd"] = json!(cmd); }
++        else { message["shell"] = json!(true); }
++        send(&mut stream, &message).await?;
++        let (read, write) = stream.into_split();
++        let mut reader = BufReader::new(read);
++        tokio::time::timeout(std::time::Duration::from_secs(15), response(&mut reader)).await??;
++        *parts = Some((PtyRead::Local(reader), PtyWrite::Local(Mutex::new(write))));
++        Ok(())
++    }
++    pub async fn exec(&mut self, cmd: &str) -> Result<()> {
++        match self {
++            Self::Remote(channel) => channel.exec(cmd).await,
++            Self::Local { .. } => self.start_local(Some(cmd)).await,
++        }
++    }
++    pub async fn shell(&mut self) -> Result<()> {
++        match self {
++            Self::Remote(channel) => channel.shell().await,
++            Self::Local { .. } => self.start_local(None).await,
++        }
++    }
++    pub fn into_parts(self) -> (PtyRead, PtyWrite) {
++        match self {
++            Self::Remote(channel) => {
++                let (read, write) = channel.into_parts();
++                (PtyRead::Remote(read), PtyWrite::Remote(write))
++            }
++            Self::Local { parts, .. } => parts.expect("PTY must be started before splitting"),
++        }
++    }
++}
++
++pub enum PtyMsg {
++    Data { data:Vec<u8> },
++    ExtendedData { data:Vec<u8> },
++    Eof,
++    Close,
++    ExitStatus {},
++    Other,
++}
++pub enum PtyRead {
++    Remote(ssh::PtyRead),
++    Local(BufReader<OwnedReadHalf>),
++}
++impl PtyRead {
++    pub async fn wait(&mut self) -> Option<PtyMsg> {
++        match self {
++            Self::Remote(read) => read.wait().await.map(|message| match message {
++                ssh::PtyMsg::Data { data } => PtyMsg::Data { data:data.to_vec() },
++                ssh::PtyMsg::ExtendedData { data, .. } => PtyMsg::ExtendedData { data:data.to_vec() },
++                ssh::PtyMsg::Eof => PtyMsg::Eof,
++                ssh::PtyMsg::Close => PtyMsg::Close,
++                ssh::PtyMsg::ExitStatus { .. } => PtyMsg::ExitStatus {},
++                _ => PtyMsg::Other,
++            }),
++            Self::Local(read) => {
++                let value = match response(read).await {
++                    Ok(value) => value,
++                    Err(error) => { eprintln!("[local PTY] {error}"); return None; }
++                };
++                match value["event"].as_str() {
++                    Some("data") => serde_json::from_value(value["data"].clone()).ok().map(|data| PtyMsg::Data { data }),
++                    Some("eof") => Some(PtyMsg::Eof),
++                    _ => None,
++                }
++            }
++        }
++    }
++}
++pub enum PtyWrite {
++    Remote(ssh::PtyWrite),
++    Local(Mutex<OwnedWriteHalf>),
++}
++impl PtyWrite {
++    pub async fn data_bytes(&self, data: Vec<u8>) -> Result<()> {
++        match self {
++            Self::Remote(write) => Ok(write.data_bytes(data).await?),
++            Self::Local(write) => send(&mut *write.lock().await, &json!({"op":"input", "data":data})).await,
++        }
++    }
++    pub async fn window_change(&self, cols:u32, rows:u32, x:u32, y:u32) -> Result<()> {
++        match self {
++            Self::Remote(write) => Ok(write.window_change(cols, rows, x, y).await?),
++            Self::Local(write) => send(&mut *write.lock().await, &json!({"op":"resize", "cols":cols, "rows":rows})).await,
++        }
++    }
++    pub async fn close(&self) -> Result<()> {
++        match self {
++            Self::Remote(write) => Ok(write.close().await?),
++            Self::Local(write) => {
++                let mut write = write.lock().await;
++                send(&mut *write, &json!({"op":"close"})).await?;
++                write.shutdown().await?;
++                Ok(())
++            }
++        }
++    }
++}
 --- a/src-tauri/src/upload.rs
 +++ b/src-tauri/src/upload.rs
 @@ -1,6 +1,6 @@

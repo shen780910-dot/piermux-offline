@@ -27,15 +27,22 @@ bash piermux-offline/start-piermux.sh
 不要只傳啟動指令，必須完整保留 rootfs 的檔案、權限與符號連結。
 啟動與編譯都不會在 目標主機 下載相依套件。
 
-## 連線至 tmux
+## 本機 tmux：只填顯示名稱
 
-Piermux 透過 SSH 連線，新增主機時填入 目標主機 或 localhost、
-自己的帳號與實際 SSH port。主機必須已有可用的 SSH 服務。
-容器預設共用主機網路並掛入使用者 home；金鑰請指定 home 內的實際路徑。
-密碼儲存需要桌面的 Secret Service/keyring；若無法使用，先採用 SSH key，
-不要把密碼或私鑰提交到此公開 repository。
-設定資料預設存於使用者 home 的 XDG 資料目錄，關閉 GUI 後保留。
-主機的 tmux 2.7 相容性需實測；容器內的 GUI 不會取代主機 tmux。
+先關閉舊版 GUI，再用新版 start-piermux.sh 啟動。不要只替換啟動指令，必須完整解壓新版套件。
+新增連線預設「本機 tmux」，只需填顯示名稱並儲存，不需要 SSH host、帳號、密碼或私鑰。
+既有錯選 SSH 的項目可點鉛筆，將連線方式改為「本機 tmux」後儲存。
+左側展開本機項目即可看到目前使用者的 tmux sessions；主機列的 + 可新增 session。
+每個 session 可作為專案，上方 window 按鈕可切換 agent 終端機。
+
+啟動指令會在主機執行 Python 標準函式庫 bridge，使用私人 Unix socket，不開 TCP 或 SSH。
+指令與 PTY 在主機執行，保留原本 PATH、shell、tmux server 和 bsub 等環境。
+主機需要既有 tmux 與 Python 3；Rocky 若沒有 python3 指令，會自動使用 /usr/libexec/platform-python。
+關閉 GUI 會清理 bridge 與 attach client，保留 tmux session 與既有 agent 工作。
+從 tmux 裡啟動也可用，新 PTY 會清除外層 TMUX／TMUX_PANE 避免巢狀連線錯誤。
+
+遠端 SSH 功能保留，只有選「SSH 遠端主機」才需要提供認證資訊。
+本機模式不會存取 keyring，也不會繞過排程系統的 5-agent 限制。
 
 ## 驗證與限制
 
