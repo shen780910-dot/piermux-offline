@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -euxo pipefail
 work_dir="$(mktemp -d)"
 socket="piermux-test-$$"
 tmux_ci() { "${TMUX_TEST_BIN:-tmux}" -L "$socket" "$@"; }
@@ -23,3 +23,4 @@ if tmux_ci list-windows -t '=project-a:' >/dev/null 2>&1; then
   exit 1
 fi
 echo "tmux integration: selection, active capture, upload directory and exact session lookup passed"
+
