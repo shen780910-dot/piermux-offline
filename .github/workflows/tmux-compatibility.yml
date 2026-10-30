@@ -1,0 +1,32 @@
+name: Test tmux compatibility
+on:
+  push:
+    paths:
+      - extensions/test-tmux-windows.sh
+      - .github/workflows/tmux-compatibility.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tmux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libevent-dev libncurses-dev tmux
+      - name: Build tmux 2.7
+        run: |
+          curl -fL --retry 3 https://github.com/tmux/tmux/releases/download/2.7/tmux-2.7.tar.gz -o "$RUNNER_TEMP/tmux27.tar.gz"
+          mkdir -p "$RUNNER_TEMP/tmux27-src"
+          tar -xzf "$RUNNER_TEMP/tmux27.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/tmux27-src"
+          cd "$RUNNER_TEMP/tmux27-src"
+          ./configure --prefix="$RUNNER_TEMP/tmux27-install"
+          make -j2
+          make install
+      - name: Test system tmux
+        run: bash extensions/test-tmux-windows.sh
+      - name: Test tmux 2.7
+        run: TMUX_TEST_BIN="$RUNNER_TEMP/tmux27-install/bin/tmux" bash extensions/test-tmux-windows.sh
