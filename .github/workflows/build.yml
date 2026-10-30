@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
     paths:
+      - patches/**
+      - extensions/**
       - smoke-test.sh
       - Dockerfile
       - start-piermux.sh
@@ -26,7 +28,7 @@ jobs:
         id: image-cache
         with:
           path: .build-cache/piermux-image.tar
-          key: runtime-v1-${{ runner.os }}-${{ hashFiles('Dockerfile') }}
+          key: runtime-v1-${{ runner.os }}-${{ hashFiles('Dockerfile', 'patches/**', 'extensions/**') }}
       - name: Load cached runtime
         if: steps.image-cache.outputs.cache-hit == 'true'
         run: docker load -i .build-cache/piermux-image.tar
@@ -42,7 +44,7 @@ jobs:
         if: steps.image-cache.outputs.cache-hit != 'true'
         with:
           path: .build-cache/piermux-image.tar
-          key: runtime-v1-${{ runner.os }}-${{ hashFiles('Dockerfile') }}
+          key: runtime-v1-${{ runner.os }}-${{ hashFiles('Dockerfile', 'patches/**', 'extensions/**') }}
       - name: Verify GUI under Xvfb
         timeout-minutes: 3
         run: |
