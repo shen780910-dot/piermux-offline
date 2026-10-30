@@ -17,10 +17,9 @@ done
 tmux_ci capture-pane -t '=project-a:' -p | grep -q agent-two
 test "$(tmux_ci display-message -p -t '=project-a:' '#{pane_current_path}')" = "$work_dir/agent-2"
 test "$(tmux_ci display-message -p -t '=project-a:' '#{window_id}')" = "$second_id"
-tmux_ci rename-session -t '=project-a' renamed-project
+tmux_ci kill-session -t '=project-a'
 if tmux_ci list-windows -t '=project-a:' >/dev/null 2>&1; then
   echo "Exact session lookup incorrectly matched project-alpha" >&2
   exit 1
 fi
 echo "tmux integration: selection, active capture, upload directory and exact session lookup passed"
-
