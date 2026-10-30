@@ -1,0 +1,64 @@
+name: Build offline bundle
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - start-piermux.sh
+      - README.md
+      - .github/workflows/build.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check launcher syntax
+        run: bash -n start-piermux.sh
+      - name: Build Linux application and runtime
+        run: docker build --progress=plain -t piermux-offline .
+      - name: Verify GUI under Xvfb
+        run: |
+          docker run --rm --network none --user 1000:1000 --env HOME=/tmp/test-home --entrypoint /bin/bash piermux-offline -euo pipefail -c '
+            mkdir -p "$HOME"
+            xvfb-run -a dbus-run-session -- bash -euo pipefail -c '\''
+              /opt/piermux/piermux >/tmp/gui.log 2>&1 &
+              app_pid=$!
+              trap "kill $app_pid 2>/dev/null || true" EXIT
+              for attempt in $(seq 1 60); do
+                if ! kill -0 "$app_pid" 2>/dev/null; then cat /tmp/gui.log; exit 1; fi
+                if xwininfo -root -tree | grep -qi piermux; then
+                  echo "Piermux GUI window detected"
+                  cat /tmp/gui.log
+                  exit 0
+                fi
+                sleep 1
+              done
+              cat /tmp/gui.log
+              echo "No Piermux window detected" >&2
+              exit 1
+            '\''
+          '
+      - name: Export offline sandbox and package
+        run: |
+          set -euo pipefail
+          mkdir -p staging/piermux-offline/rootfs dist
+          container_id=$(docker create piermux-offline)
+          trap 'docker rm "$container_id" >/dev/null' EXIT
+          docker export "$container_id" -o rootfs.tar
+          tar --no-same-owner --exclude='./dev/*' --exclude='dev/*' --exclude='./proc/*' --exclude='proc/*' --exclude='./sys/*' --exclude='sys/*' -xf rootfs.tar -C staging/piermux-offline/rootfs
+          cp start-piermux.sh README.md staging/piermux-offline/
+          chmod +x staging/piermux-offline/start-piermux.sh
+          tar -C staging -czf dist/piermux-offline-linux-x86_64.tar.gz piermux-offline
+          cd dist
+          sha256sum piermux-offline-linux-x86_64.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: piermux-offline-linux-x86_64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
