@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
     paths:
+      - smoke-test.sh
       - Dockerfile
       - start-piermux.sh
       - README.md
@@ -10,38 +11,36 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: write
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
+      - name: Cancel superseded diagnostic runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST repos/${{ github.repository }}/actions/runs/41031453514/cancel || true
+          gh api --method POST repos/${{ github.repository }}/actions/runs/41031436060/cancel || true
       - uses: actions/checkout@v4
       - name: Check launcher syntax
-        run: bash -n start-piermux.sh
+        run: bash -n start-piermux.sh && bash -n smoke-test.sh
       - name: Build Linux application and runtime
         run: docker build --progress=plain -t piermux-offline .
       - name: Verify GUI under Xvfb
+        timeout-minutes: 3
         run: |
-          docker run --rm --network none --user 1000:1000 --env HOME=/tmp/test-home --entrypoint /bin/bash piermux-offline -euo pipefail -c '
+          timeout --kill-after=10s 120s docker run --name piermux-smoke --network none --user 1000:1000 --env HOME=/tmp/test-home --mount type=bind,src="$PWD/smoke-test.sh",dst=/smoke-test.sh,readonly --entrypoint /bin/bash piermux-offline -euxo pipefail -c '
             mkdir -p "$HOME"
-            xvfb-run -a dbus-run-session -- bash -euo pipefail -c '\''
-              /opt/piermux/piermux >/tmp/gui.log 2>&1 &
-              app_pid=$!
-              trap "kill $app_pid 2>/dev/null || true" EXIT
-              for attempt in $(seq 1 60); do
-                if ! kill -0 "$app_pid" 2>/dev/null; then cat /tmp/gui.log; exit 1; fi
-                if xwininfo -root -tree | grep -qi piermux; then
-                  echo "Piermux GUI window detected"
-                  cat /tmp/gui.log
-                  exit 0
-                fi
-                sleep 1
-              done
-              cat /tmp/gui.log
-              echo "No Piermux window detected" >&2
-              exit 1
-            '\''
+            exec dbus-run-session -- xvfb-run -a bash /smoke-test.sh
           '
+      - name: Collect GUI diagnostics
+        if: always()
+        run: |
+          docker logs piermux-smoke 2>&1 || true
+          docker inspect --format '{{json .State}}' piermux-smoke || true
+          docker rm -f piermux-smoke || true
       - name: Export offline sandbox and package
         run: |
           set -euo pipefail
