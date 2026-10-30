@@ -11,27 +11,42 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-  actions: write
+concurrency:
+  group: offline-build
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
-      - name: Cancel superseded diagnostic runs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --method POST repos/${{ github.repository }}/actions/runs/41031453514/cancel || true
-          gh api --method POST repos/${{ github.repository }}/actions/runs/41031436060/cancel || true
       - uses: actions/checkout@v4
       - name: Check launcher syntax
         run: bash -n start-piermux.sh && bash -n smoke-test.sh
+      - uses: actions/cache/restore@v4
+        id: image-cache
+        with:
+          path: .build-cache/piermux-image.tar
+          key: runtime-v1-${{ runner.os }}-${{ hashFiles('Dockerfile') }}
+      - name: Load cached runtime
+        if: steps.image-cache.outputs.cache-hit == 'true'
+        run: docker load -i .build-cache/piermux-image.tar
       - name: Build Linux application and runtime
+        if: steps.image-cache.outputs.cache-hit != 'true'
         run: docker build --progress=plain -t piermux-offline .
+      - name: Save runtime archive
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .build-cache
+          docker save piermux-offline -o .build-cache/piermux-image.tar
+      - uses: actions/cache/save@v4
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        with:
+          path: .build-cache/piermux-image.tar
+          key: runtime-v1-${{ runner.os }}-${{ hashFiles('Dockerfile') }}
       - name: Verify GUI under Xvfb
         timeout-minutes: 3
         run: |
-          timeout --kill-after=10s 120s docker run --name piermux-smoke --network none --user 1000:1000 --env HOME=/tmp/test-home --mount type=bind,src="$PWD/smoke-test.sh",dst=/smoke-test.sh,readonly --entrypoint /bin/bash piermux-offline -euxo pipefail -c '
+          timeout --kill-after=10s 120s docker run --name piermux-smoke --network none --user nobody:nogroup --env HOME=/tmp/test-home --mount type=bind,src="$PWD/smoke-test.sh",dst=/smoke-test.sh,readonly --entrypoint /bin/bash piermux-offline -euxo pipefail -c '
             mkdir -p "$HOME"
             exec dbus-run-session -- xvfb-run -a bash /smoke-test.sh
           '
