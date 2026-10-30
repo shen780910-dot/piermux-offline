@@ -1,0 +1,266 @@
+--- a/src/desktop/SessionPanel.tsx
++++ b/src/desktop/SessionPanel.tsx
+@@ -33,6 +33,7 @@
+ import { Button } from "@/components/ui/button";
+ import { relativeTime } from "@/lib/time";
+ import { SendBar } from "./SendBar";
++import { WindowTabs } from "./WindowTabs";
+ import { PasteConfirmDialog } from "@/components/PasteConfirmDialog";
+ import { usePasteGuard } from "@/components/usePasteGuard";
+ 
+@@ -862,6 +863,16 @@
+         </div>
+       </header>
+ 
++      {target.kind === "tmux" && mode === "attach" && (
++        <WindowTabs
++          key={`${host.id}:${target.session.socket}:${target.session.name}`}
++          hostId={host.id}
++          session={target.session}
++          enabled={attachId !== null}
++          onSelected={() => { xtermRef.current?.focus(); void forceRedraw(); }}
++        />
++      )}
++
+       <main className="relative flex-1 overflow-hidden bg-[#0a0a0a]">
+         <div ref={containerRef} className="absolute inset-0" />
+         {dragOver && target.kind === "tmux" && (
+--- /dev/null
++++ b/src/desktop/WindowTabs.tsx
+@@ -0,0 +1,91 @@
++import * as React from "react";
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++import { invoke } from "@tauri-apps/api/core";
++import { Loader2, RefreshCw } from "lucide-react";
++import type { Session } from "@/lib/types";
++
++type TmuxWindow = { id: string; index: number; name: string; active: boolean };
++
++type Props = {
++  hostId: string;
++  session: Session;
++  enabled: boolean;
++  onSelected: () => void;
++};
++
++export function WindowTabs({ hostId, session, enabled, onSelected }: Props) {
++  const queryClient = useQueryClient();
++  const stripRef = React.useRef<HTMLDivElement>(null);
++  const aliveRef = React.useRef(true);
++  React.useEffect(() => {
++    aliveRef.current = true;
++    return () => { aliveRef.current = false; };
++  }, []);
++  const queryKey = ["tmux-windows", hostId, session.socket, session.name];
++  const args = { hostId, socket: session.socket, sessionName: session.name };
++  const windows = useQuery({
++    queryKey,
++    queryFn: () => invoke<TmuxWindow[]>("list_windows", args),
++    enabled,
++    refetchInterval: 10_000,
++    refetchIntervalInBackground: false,
++    retry: false,
++  });
++  const selection = useMutation({
++    mutationFn: (windowId: string) => invoke<void>("select_window", { ...args, windowId }),
++    onSuccess: async () => {
++      await queryClient.invalidateQueries({ queryKey });
++      if (aliveRef.current) onSelected();
++    },
++  });
++  const activeId = windows.data?.find((window) => window.active)?.id;
++  React.useEffect(() => {
++    stripRef.current?.querySelector('[aria-pressed="true"]')?.scrollIntoView({
++      block: "nearest", inline: "nearest",
++    });
++  }, [activeId]);
++
++  return (
++    <section aria-label="tmux window 切換" className="border-b border-border bg-background">
++      <div className="flex min-w-0 items-center gap-2 px-3 py-2">
++        <span className="shrink-0 text-xs text-muted-foreground">Windows</span>
++        <div ref={stripRef} role="group" aria-label="此專案的 tmux windows"
++          aria-busy={windows.isFetching || selection.isPending}
++          className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
++          {!enabled || windows.isPending ? (
++            <span role="status" className="px-2 py-1 text-sm text-muted-foreground">連線後載入分頁…</span>
++          ) : windows.data?.length === 0 ? (
++            <span role="status" className="px-2 py-1 text-sm text-muted-foreground">沒有可用的 window</span>
++          ) : windows.data?.map((window) => (
++            <button key={window.id} type="button" aria-pressed={window.active}
++              disabled={!enabled || selection.isPending || windows.isError}
++              title={window.name}
++              onClick={() => selection.mutate(window.id)}
++              className={`flex max-w-64 shrink-0 items-center gap-1.5 rounded px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-50 ${window.active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
++              {selection.isPending && selection.variables === window.id && (
++                <Loader2 aria-hidden="true" className="h-3.5 w-3.5 shrink-0 animate-spin" />
++              )}
++              <span className="shrink-0 tabular-nums">{window.index}</span>
++              <span className="truncate">{window.name}</span>
++            </button>
++          ))}
++        </div>
++        <button type="button" aria-label="更新 window 分頁" title="更新 window 分頁"
++          disabled={!enabled || windows.isFetching || selection.isPending}
++          onClick={() => { selection.reset(); void windows.refetch(); }}
++          className="shrink-0 rounded p-2 text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
++          <RefreshCw aria-hidden="true" className={`h-4 w-4 ${windows.isFetching ? "animate-spin" : ""}`} />
++        </button>
++      </div>
++      {(windows.isError || selection.isError) && (
++        <div role="alert" className="flex items-center justify-between gap-3 px-4 pb-2 text-sm text-destructive">
++          <span>無法{selection.isError ? "切換" : "載入"} window，請重新整理後再試。</span>
++          <button type="button" onClick={() => { selection.reset(); void windows.refetch(); }}
++            className="shrink-0 rounded px-2 py-1 underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
++            重新整理
++          </button>
++        </div>
++      )}
++    </section>
++  );
++}
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -9,6 +9,7 @@
+ mod sessions;
+ mod ssh;
+ mod upload;
++mod windows;
+ 
+ use tauri::Manager;
+ 
+@@ -91,6 +92,8 @@
+             commands::import_private_key,
+             // M1c real(SSH exec):取代之前的 sessions_mock
+             sessions::list_sessions,
++            windows::list_windows,
++            windows::select_window,
+             sessions::host_status,
+             // SPEC §6.6 kill_session + rename + new(tree view session-level)
+             sessions::kill_session,
+--- /dev/null
++++ b/src-tauri/src/windows.rs
+@@ -0,0 +1,123 @@
++use serde::Serialize;
++use sqlx::sqlite::SqlitePool;
++use tauri::State;
++
++use crate::{hosts, sessions};
++
++#[derive(Debug, Serialize, PartialEq)]
++pub struct TmuxWindow {
++    id: String,
++    index: u32,
++    name: String,
++    active: bool,
++}
++
++fn valid_window_id(value: &str) -> bool {
++    value.strip_prefix('@').is_some_and(|digits| {
++        !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
++    })
++}
++
++fn parse_windows(output: &str) -> Result<Vec<TmuxWindow>, String> {
++    output.lines().filter(|line| !line.is_empty()).map(|line| {
++        let columns: Vec<_> = line.splitn(4, '|').collect();
++        if columns.len() != 4 || !valid_window_id(columns[0]) {
++            return Err(format!("Invalid tmux window record: {line}"));
++        }
++        let index = columns[1].parse().map_err(|_| "Invalid window index".to_string())?;
++        let active = match columns[2] {
++            "1" => true,
++            "0" => false,
++            _ => return Err("Invalid window active flag".into()),
++        };
++        Ok(TmuxWindow { id: columns[0].into(), index, name: columns[3].into(), active })
++    }).collect()
++}
++
++fn quote(value: &str) -> String {
++    format!("'{}'", value.replace('\'', "'\\''"))
++}
++
++fn exact_target(session_name: &str, window_id: Option<&str>) -> String {
++    format!("={session_name}:{}", window_id.unwrap_or(""))
++}
++
++#[tauri::command]
++pub async fn list_windows(
++    pool: State<'_, SqlitePool>,
++    host_id: String,
++    socket: String,
++    session_name: String,
++) -> Result<Vec<TmuxWindow>, String> {
++    let host = hosts::fetch_one(pool.inner(), &host_id).await.map_err(|e| e.to_string())?;
++    let command = format!(
++        "{} list-windows -t {} -F '#{{window_id}}|#{{window_index}}|#{{window_active}}|#{{window_name}}'",
++        sessions::tmux_cmd(&host, &socket), quote(&exact_target(&session_name, None))
++    );
++    let output = sessions::run_on_host(pool.inner(), &host, &command).await.map_err(|e| e.to_string())?;
++    parse_windows(&output)
++}
++
++#[tauri::command]
++pub async fn select_window(
++    pool: State<'_, SqlitePool>,
++    host_id: String,
++    socket: String,
++    session_name: String,
++    window_id: String,
++) -> Result<(), String> {
++    if !valid_window_id(&window_id) {
++        return Err("Invalid tmux window ID".into());
++    }
++    let host = hosts::fetch_one(pool.inner(), &host_id).await.map_err(|e| e.to_string())?;
++    let target = exact_target(&session_name, Some(&window_id));
++    let command = format!("{} select-window -t {}", sessions::tmux_cmd(&host, &socket), quote(&target));
++    sessions::run_on_host(pool.inner(), &host, &command).await.map_err(|e| e.to_string())?;
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn parses_nonzero_indexes_unicode_and_delimiters_in_names() {
++        let windows = parse_windows("@9|3|0|agent-1\n@10|7|1|專案 A | review\n").unwrap();
++        assert_eq!(windows.len(), 2);
++        assert_eq!(windows[1], TmuxWindow {
++            id: "@10".into(), index: 7, name: "專案 A | review".into(), active: true,
++        });
++    }
++
++    #[test]
++    fn empty_output_is_an_empty_list() {
++        assert!(parse_windows("\n").unwrap().is_empty());
++    }
++
++    #[test]
++    fn rejects_invalid_or_injectable_window_ids() {
++        for id in ["", "@", "1", "@-1", "@1;exit", "@１", "@1:2"] {
++            assert!(!valid_window_id(id), "{id}");
++        }
++        assert!(valid_window_id("@0"));
++        assert!(valid_window_id("@123"));
++    }
++
++    #[test]
++    fn rejects_malformed_records_instead_of_switching_to_another_target() {
++        for line in ["@1|name", "@1|oops|0|name", "@1|0|2|name", "oops|0|1|name"] {
++            assert!(parse_windows(line).is_err(), "{line}");
++        }
++    }
++
++    #[test]
++    fn quotes_session_names_as_a_single_shell_argument() {
++        assert_eq!(quote("project's work"), "'project'\\''s work'");
++    }
++
++    #[test]
++    fn exact_targets_do_not_fall_back_to_another_project() {
++        assert_eq!(exact_target("project-a", None), "=project-a:");
++        assert_eq!(exact_target("project-a", Some("@9")), "=project-a:@9");
++    }
++}
